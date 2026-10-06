@@ -4,17 +4,17 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Spatial-Copilot · 空间智能体应急决策工作台</title>
-  <!-- Leaflet CSS & JS -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <!-- Lucide Icons -->
+  <!-- 本地优先加载 Leaflet，防止外网 CDN 阻塞导致白屏 -->
+  <link rel="stylesheet" href="./vendor/leaflet.css" />
+  <script src="./vendor/leaflet.js"></script>
+  <!-- 图标库 -->
   <script src="https://unpkg.com/lucide@latest"></script>
   <style>
     :root {
-      --bg-dark: #0f172a;
-      --panel-bg: #1e293b;
-      --card-bg: #334155;
-      --border-color: #475569;
+      --bg-dark: #0b0f19;
+      --panel-bg: #111827;
+      --card-bg: #1f2937;
+      --border-color: #374151;
       --accent-blue: #38bdf8;
       --accent-emerald: #10b981;
       --accent-rose: #f43f5e;
@@ -22,77 +22,79 @@
       --text-muted: #94a3b8;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
+    html, body {
+      width: 100%;
+      height: 100%;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: var(--bg-dark);
       color: var(--text-main);
       display: flex;
       flex-direction: column;
-      height: 100vh;
       overflow: hidden;
     }
     /* Top Header */
     #top-nav {
-      height: 54px;
-      background: #0f172a;
+      height: 52px;
+      min-height: 52px;
+      background: #111827;
       border-bottom: 1px solid var(--border-color);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 18px;
+      padding: 0 16px;
       z-index: 1000;
     }
     .brand { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: #fff; }
-    .header-actions { display: flex; align-items: center; gap: 10px; }
+    .header-actions { display: flex; align-items: center; gap: 8px; }
     .btn-header {
       display: flex;
       align-items: center;
-      gap: 6px;
-      background: #1e293b;
+      gap: 5px;
+      background: #1f2937;
       border: 1px solid var(--border-color);
       color: #e2e8f0;
-      padding: 6px 12px;
-      border-radius: 6px;
+      padding: 5px 10px;
+      border-radius: 5px;
       font-size: 12px;
       cursor: pointer;
     }
-    .btn-header:hover { background: #334155; color: #fff; }
+    .btn-header:hover { background: #374151; color: #fff; }
 
-    /* Layout */
-    #main-layout { flex: 1; display: flex; position: relative; overflow: hidden; }
+    /* Main Container */
+    #main-layout { flex: 1; display: flex; position: relative; overflow: hidden; width: 100%; height: calc(100vh - 52px); }
 
     /* Left Sidebar */
     #sidebar {
       width: 440px;
+      min-width: 440px;
       background: #111827;
       border-right: 1px solid var(--border-color);
       display: flex;
       flex-direction: column;
+      height: 100%;
       z-index: 500;
     }
 
-    /* Settings Drawer */
     #config-drawer {
       display: none;
       background: #182234;
       border-bottom: 1px solid var(--border-color);
-      padding: 14px 16px;
+      padding: 12px 16px;
       font-size: 12px;
     }
     .form-row { margin-bottom: 8px; }
-    .form-row label { display: block; font-size: 11px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 3px; }
+    .form-row label { display: block; font-size: 11px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 2px; }
     .form-row input, .form-row select {
       width: 100%;
       background: #0b0f19;
       border: 1px solid var(--border-color);
       color: #fff;
-      padding: 6px 10px;
+      padding: 6px 8px;
       border-radius: 4px;
       font-size: 12px;
       outline: none;
     }
 
-    /* Trace Panel */
     #trace-panel {
       flex: 1;
       overflow-y: auto;
@@ -102,8 +104,8 @@
       gap: 10px;
     }
     .trace-card {
-      background: #1e293b;
-      border: 1px solid #334155;
+      background: #1f2937;
+      border: 1px solid var(--border-color);
       border-radius: 6px;
       padding: 12px;
       font-size: 13px;
@@ -134,10 +136,9 @@
       overflow-x: auto;
     }
 
-    /* Quick Tags */
     .quick-tags {
-      padding: 8px 14px;
-      border-top: 1px solid #334155;
+      padding: 8px 12px;
+      border-top: 1px solid var(--border-color);
       display: flex;
       gap: 6px;
       overflow-x: auto;
@@ -145,8 +146,8 @@
     }
     .tag-btn {
       white-space: nowrap;
-      background: #1e293b;
-      border: 1px solid #334155;
+      background: #1f2937;
+      border: 1px solid var(--border-color);
       color: var(--text-muted);
       font-size: 11px;
       padding: 4px 8px;
@@ -155,10 +156,9 @@
     }
     .tag-btn:hover { color: #fff; border-color: var(--accent-blue); }
 
-    /* Input Footer */
     #input-footer {
       padding: 12px 14px;
-      border-top: 1px solid #334155;
+      border-top: 1px solid var(--border-color);
       display: flex;
       gap: 8px;
       background: #111827;
@@ -187,28 +187,44 @@
     }
 
     /* Right Map Viewport */
-    #map-viewport { flex: 1; position: relative; }
-    #map { width: 100%; height: 100%; }
+    #map-viewport {
+      flex: 1;
+      position: relative;
+      height: 100%;
+      background: #1e293b;
+    }
+    /* 强制绝对定位，彻底消除高度为0导致底图空白的 Bug */
+    #map {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
 
-    /* Map Toolbars */
+    /* Toolbars */
     .map-tool-bar {
       position: absolute;
       top: 16px;
       left: 16px;
-      background: rgba(15, 23, 42, 0.92);
+      background: rgba(17, 24, 39, 0.95);
       border: 1px solid var(--border-color);
       backdrop-filter: blur(8px);
       border-radius: 6px;
-      padding: 6px 10px;
-      z-index: 1000;
+      padding: 6px 12px;
+      z-index: 500;
       display: flex;
       gap: 8px;
       align-items: center;
       font-size: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
     }
     .tool-btn {
-      background: #1e293b;
-      border: 1px solid #475569;
+      background: #1f2937;
+      border: 1px solid var(--border-color);
       color: #fff;
       padding: 5px 10px;
       border-radius: 4px;
@@ -225,18 +241,19 @@
       position: absolute;
       top: 16px;
       right: 16px;
-      background: rgba(15, 23, 42, 0.92);
+      background: rgba(17, 24, 39, 0.95);
       border: 1px solid var(--border-color);
       backdrop-filter: blur(8px);
       border-radius: 6px;
       padding: 6px 10px;
-      z-index: 1000;
+      z-index: 500;
       display: flex;
       gap: 6px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
     }
     .basemap-opt {
-      background: #1e293b;
-      border: 1px solid #334155;
+      background: #1f2937;
+      border: 1px solid var(--border-color);
       color: #94a3b8;
       font-size: 11px;
       padding: 4px 8px;
@@ -245,20 +262,20 @@
     }
     .basemap-opt.active { background: #0284c7; color: #fff; border-color: #38bdf8; }
 
-    /* Bottom Attribute Table Drawer */
+    /* Attribute Table */
     #table-drawer {
       position: absolute;
       bottom: 0;
       left: 0;
       right: 0;
       height: 220px;
-      background: rgba(15, 23, 42, 0.96);
+      background: rgba(17, 24, 39, 0.98);
       border-top: 1px solid var(--border-color);
-      z-index: 1000;
+      z-index: 600;
       backdrop-filter: blur(12px);
       display: none;
       flex-direction: column;
-      box-shadow: 0 -4px 20px rgba(0,0,0,0.5);
+      box-shadow: 0 -4px 20px rgba(0,0,0,0.6);
     }
     .table-header {
       padding: 8px 16px;
@@ -275,16 +292,16 @@
     td { padding: 8px; border-bottom: 1px solid rgba(51, 65, 85, 0.5); }
     tr:hover { background: rgba(51, 65, 85, 0.3); }
 
-    /* Map Legend */
+    /* Legend */
     .map-legend {
       position: absolute;
       bottom: 24px;
       right: 16px;
-      background: rgba(15, 23, 42, 0.92);
+      background: rgba(17, 24, 39, 0.95);
       border: 1px solid var(--border-color);
       border-radius: 6px;
       padding: 10px 14px;
-      z-index: 900;
+      z-index: 500;
       font-size: 11px;
     }
     .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
@@ -346,7 +363,7 @@
             <i data-lucide="bot" style="width:14px;height:14px;"></i>
             <span>Spatial Agent 已就绪</span>
           </div>
-          <div>系统集成 Shapely 空间引擎与多源地理图层。支持通过下方输入框提问，或点击地图上的<b>“点选测点分析”</b>在任意坐标布设积水隐患点。</div>
+          <div>系统底图已自适应就绪。支持通过下方输入框提问，或点击地图右上角工具在任意地点点选积水点进行空间决策。</div>
         </div>
       </div>
 
@@ -377,21 +394,19 @@
         </button>
         <span style="color:#64748b;">|</span>
         <span style="color:var(--text-muted);font-size:11px;">缓冲区:</span>
-        <select id="buffer-select" style="background:#1e293b;border:1px solid #475569;color:#fff;padding:2px 6px;border-radius:4px;font-size:12px;">
+        <select id="buffer-select" style="background:#1f2937;border:1px solid #475569;color:#fff;padding:2px 6px;border-radius:4px;font-size:12px;">
           <option value="500">500 米</option>
           <option value="1000">1000 米</option>
           <option value="2000">2000 米</option>
         </select>
       </div>
 
-      <!-- 开源底图选择器 (Basemap Switcher) -->
+      <!-- 底图多源高可用切换器 (AutoNavi / OSM / Satellite / Dark) -->
       <div class="basemap-picker">
-        <button class="basemap-opt active" id="bm-osm" onclick="switchBasemap('osm')">
-          <i data-lucide="globe" style="width:12px;height:12px;display:inline;"></i>
-          <span>开源 OSM 标准底图</span>
-        </button>
-        <button class="basemap-opt" id="bm-dark" onclick="switchBasemap('dark')">Carto 极客暗黑</button>
+        <button class="basemap-opt active" id="bm-amap" onclick="switchBasemap('amap')">高德标准道路 (国内秒开)</button>
+        <button class="basemap-opt" id="bm-osm" onclick="switchBasemap('osm')">开源 OSM 标准底图</button>
         <button class="basemap-opt" id="bm-satellite" onclick="switchBasemap('satellite')">遥感卫星实景</button>
+        <button class="basemap-opt" id="bm-dark" onclick="switchBasemap('dark')">Carto 极客暗黑</button>
       </div>
 
       <!-- Map Legend -->
@@ -440,7 +455,7 @@
   </div>
 
   <script>
-    lucide.createIcons();
+    if (window.lucide) lucide.createIcons();
 
     // Toggle Config Drawer
     document.getElementById('toggle-config-btn').onclick = () => {
@@ -459,33 +474,46 @@
     }
 
     // ==========================================
-    // 底图图层初始化：支持开源 OSM 标准底图、Carto 暗夜、Esri 卫星影像
+    // 底图多源高可用配置：高德标准瓦片（免Key/国内毫秒级必显）+ OSM + 卫星实景 + Carto
     // ==========================================
     const basemaps = {
-      // 1. 纯开源官方 OpenStreetMap 标准底图
-      osm: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      // 1. 高德矢量高清底图（在中国大陆 100% 毫秒级直连加载，中文清晰）
+      amap: L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
+        subdomains: ['1', '2', '3', '4'],
+        maxZoom: 18,
+        attribution: '&copy; 高德地图 AutoNavi'
+      }),
+      // 2. 开源官方 OpenStreetMap 瓦片
+      osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
       }),
-      // 2. Carto DarkMatter 极客深色底图
-      dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        maxZoom: 19,
-        attribution: '&copy; CARTO &copy; OpenStreetMap'
-      }),
-      // 3. Esri 高清卫星影像
-      satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      // 3. 高德高分辨率卫星实景
+      satellite: L.tileLayer('https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}', {
+        subdomains: ['1', '2', '3', '4'],
         maxZoom: 18,
-        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS'
+        attribution: '&copy; 高德实景影像 AutoNavi'
+      }),
+      // 4. Carto 极客暗黑
+      dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        subdomains: 'abcd',
+        maxZoom: 19,
+        attribution: '&copy; CARTO'
       })
     };
 
+    // 初始化地图（默认采用 100% 极速加载的高德底图，避免 OSM 连接重置导致白屏）
     const map = L.map('map', {
       center: [30.495, 114.405],
       zoom: 13,
-      layers: [basemaps.osm], // 默认启用开源 OSM 底图！
+      layers: [basemaps.amap],
       zoomControl: false
     });
     L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+    // 核心：延迟强制重绘，彻底解决在任何浏览器中容器尺寸未计算导致的底图空白！
+    setTimeout(() => { map.invalidateSize(true); }, 250);
+    window.addEventListener('resize', () => { map.invalidateSize(); });
 
     function switchBasemap(name) {
       Object.values(basemaps).forEach(l => map.removeLayer(l));
@@ -497,7 +525,6 @@
     // 要素图层组
     const layerGroup = L.layerGroup().addTo(map);
 
-    // 默认点位数据
     const initialPoints = [
       { id: 1, name: "光谷广场下穿通道积水点", lat: 30.505, lon: 114.401, depth: 0.55 },
       { id: 2, name: "关山大道新竹路交叉口", lat: 30.492, lon: 114.418, depth: 0.38 },
@@ -510,7 +537,7 @@
       { id: 101, name: "华中农业大学体育馆", lat: 30.475, lon: 114.358, capacity: 3500, district: "洪山区", phone: "027-87282001" },
       { id: 102, name: "中南财经政法大学艺体中心", lat: 30.481, lon: 114.388, capacity: 2800, district: "洪山区", phone: "027-88386110" },
       { id: 103, name: "华中科技大学光谷体育馆", lat: 30.512, lon: 114.415, capacity: 6000, district: "洪山区", phone: "027-87541114" },
-      { id: 104, name: "光谷一小应急避难场所", lat: 30.501, lon: 114.404, capacity: 1500, district: "东湖高新区", phone: "027-87171002" },
+      { id: 104, name: "光谷一小应急避难场所", lat: 30.503, lon: 114.403, capacity: 1500, district: "东湖高新区", phone: "027-87171002" },
       { id: 105, name: "光谷二小体育馆", lat: 30.485, lon: 114.425, capacity: 1800, district: "东湖高新区", phone: "027-87172005" },
       { id: 106, name: "光谷实验中学避难点", lat: 30.470, lon: 114.420, capacity: 2200, district: "东湖高新区", phone: "027-87173008" },
       { id: 107, name: "武汉工程大学流芳校区体育馆", lat: 30.460, lon: 114.432, capacity: 4000, district: "江夏区", phone: "027-87992010" }
@@ -525,7 +552,7 @@
           color: '#ffffff',
           weight: 2,
           fillOpacity: 0.95
-        }).bindPopup(`<b>${p.name}</b><br/>积水深度: ${p.depth}m<br/>经纬度: [${p.lat}, ${p.lon}]`).addTo(layerGroup);
+        }).bindPopup(`<b>${p.name}</b><br/>积水深度: ${p.depth}m<br/>坐标: [${p.lat}, ${p.lon}]`).addTo(layerGroup);
       });
 
       initialShelters.forEach(s => {
@@ -540,9 +567,7 @@
     }
     renderBaseElements();
 
-    // ==========================================
-    // 交互点选模式：用户点击地图放置测点并启动分析
-    // ==========================================
+    // 地图点选测点
     let isPickMode = false;
     let customPickedPoint = null;
     const btnPick = document.getElementById('btn-pick-point');
@@ -560,7 +585,6 @@
       const { lat, lng } = e.latlng;
       customPickedPoint = { lat: parseFloat(lat.toFixed(5)), lon: parseFloat(lng.toFixed(5)) };
       
-      // 添加自定义标记
       L.circleMarker([lat, lng], {
         radius: 11,
         fillColor: '#f59e0b',
@@ -575,13 +599,9 @@
       txtPick.innerText = '地图点选隐患点 (关)';
       map.getContainer().style.cursor = '';
 
-      // 自动触发分析
       executeAnalysis();
     });
 
-    // ==========================================
-    // 空间渲染与表格填充
-    // ==========================================
     let latestGeoJson = null;
 
     function populateTable(shelters) {
@@ -646,7 +666,6 @@
       populateTable(geojson.matched_shelters || matchedShelters);
     }
 
-    // 导出 GeoJSON 文件下载
     document.getElementById('btn-export-geojson').onclick = () => {
       const dataToExport = latestGeoJson || { type: "FeatureCollection", features: [] };
       const blob = new Blob([JSON.stringify(dataToExport, null, 2)], { type: "application/json" });
@@ -658,9 +677,6 @@
       URL.revokeObjectURL(url);
     };
 
-    // ==========================================
-    // 执行分析流程
-    // ==========================================
     const tracePanel = document.getElementById('trace-panel');
 
     function addTrace(type, title, text, code) {
@@ -682,7 +698,7 @@
         ${code ? `<pre class="code-block">${code}</pre>` : ''}
       `;
       tracePanel.appendChild(card);
-      lucide.createIcons();
+      if (window.lucide) lucide.createIcons();
       tracePanel.scrollTop = tracePanel.scrollHeight;
     }
 
@@ -737,11 +753,9 @@
           }
         }
       } catch (err) {
-        // 本地离线高保真计算兜底
-        addTrace('thought', '本地拓扑计算', '未检测到远程端口，正在使用内嵌 Shapely 空间引擎执行求交计算...');
-        addTrace('tool', '调度算子: buffer_analysis', '已执行 500m 空间缓冲区生成与相交求交');
+        addTrace('thought', '本地拓扑计算', '未检测到远程后端 8000 端口，正在使用内嵌空间引擎解算...');
+        addTrace('tool', '调度算子: buffer_analysis', '已执行空间缓冲区生成与相交求交');
         
-        // 生成真实经纬度缓冲区渲染
         const r_deg = (parseInt(document.getElementById('buffer-select').value) || 500) / 111319.0;
         const features = [];
         
