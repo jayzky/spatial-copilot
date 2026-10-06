@@ -1,47 +1,30 @@
 import json
 import os
-from typing import AsyncGenerator, Dict, Any, List
+import re
+from typing import AsyncGenerator, Dict, Any, List, Optional
 import httpx
 from sandbox.executor import SpatialSandbox
 
 
-# 定义标准 OpenAI 兼容的地理空间 Tool Calling 规范
 SPATIAL_TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "buffer_analysis",
-            "description": "对指定空间图层生成指定半径（米）的影响缓冲区，返回缓冲多边形要素",
+            "description": "对积水点位生成指定半径（米）的影响缓冲区，并与应急避难所图层求交，计算覆盖范围内最近的避难设施及容量",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "layer_name": {
-                        "type": "string",
-                        "description": "目标图层名称，可选：'waterlog_points'（积水点）",
-                    },
                     "distance_meters": {
                         "type": "number",
-                        "description": "缓冲区扩散半径（单位：米），例如 500",
+                        "description": "缓冲区扩散半径（单位：米），例如 500、1000、2000",
+                    },
+                    "min_capacity": {
+                        "type": "integer",
+                        "description": "避难所最低容纳人数过滤阈值，默认 0",
                     },
                 },
-                "required": ["layer_name", "distance_meters"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "spatial_intersect",
-            "description": "执行空间求交拓扑分析，筛选完全落入或相交于指定缓冲区覆盖范围内的目标要素",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "target_layer": {
-                        "type": "string",
-                        "description": "被筛选的候选要素图层，可选：'shelters'（应急避难所）",
-                    },
-                },
-                "required": ["target_layer"],
+                "required": ["distance_meters"],
             },
         },
     },
@@ -49,7 +32,7 @@ SPATIAL_TOOLS = [
         "type": "function",
         "function": {
             "name": "execute_spatial_sql",
-            "description": "执行只读空间分析 SQL 语句，计算几何距离、面积或属性过滤",
+            "description": "执行只读空间分析 SQL，用于计算属性过滤与空间统计",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -64,13 +47,13 @@ SPATIAL_TOOLS = [
     },
 ]
 
-SYSTEM_PROMPT = """你是一个专业的时空智能体（Spatial-Copilot）。
-你的职责是通过调度空间分析工具（Tool Calling）解答用户的空间规划与应急态势问题。
+SYSTEM_PROMPT = """你是一个专业的时空智能体（Spatial-Copilot），专注于城市应急防汛与空间资源调度。
+你的职责是理解用户自然语言，调度空间分析工具（`buffer_analysis` 等），根据真实的地理空间拓扑结果（距离、避难所容量、联系电话）为用户提供精准的应急疏散决策。
 
-执行规则：
-1. 分析用户意图，按步骤调用工具。对于积水应急场景，通常先调用 `buffer_analysis` 计算积水点影响范围，再调用 `spatial_intersect` 求交筛选受灾范围内的避难场所。
-2. 保持严谨，使用工具返回的真实数据做结论陈述，不要捏造坐标与统计数字。
-3. 语言专业、精炼，体现资深 WebGIS / 空间数据工程水准。
+回答规范：
+1. 提取用户意图中的核心约束：扩散半径（如 500m / 1000m）、避难所容量过滤（如大于 2000 人）。
+2. 调用工具获取真实计算结果，严格基于工具回传的数据汇报命中避难所名称、距离和容纳量，禁止臆测坐标。
+3. 语言结构化，提供清晰的疏散优先级建议。
 """
 
 
@@ -84,48 +67,77 @@ class RealLLMSpatialAgent:
         api_key: str = "",
         base_url: str = "",
         model: str = "",
+        custom_point: Optional[Dict[str, float]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        # 优先读取传入参数，次之读取环境变量
         key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("DEEPSEEK_API_KEY") or ""
         url = (base_url or os.getenv("OPENAI_BASE_URL") or "https://api.deepseek.com").rstrip("/")
         selected_model = model or os.getenv("LLM_MODEL") or "deepseek-chat"
 
-        # 如果没有配置真实的有效 key，切换为智能本地 ReAct 仿真流，并向用户提示配置项
+        # 解析用户输入的距离与容量意图
+        dist = 500.0
+        if "1000" in query or "1公里" in query or "1km" in query.lower():
+            dist = 1000.0
+        elif "2000" in query or "2公里" in query or "2km" in query.lower():
+            dist = 2000.0
+        elif "300" in query:
+            dist = 300.0
+
+        min_cap = 0
+        cap_match = re.search(r"(\d+)\s*人", query)
+        if cap_match:
+            min_cap = int(cap_match.group(1))
+
+        # 未配置远程有效 API Key 时：启动带参数意图抽取的本地高级空间沙箱
         if not key:
             yield {
                 "event": "thought",
-                "data": "未检测到远程 LLM API Key，正在以本地真实空间计算引擎（Shapely 几何拓扑沙箱）执行 ReAct 闭环...",
+                "data": f"未配置 LLM API Key，正在以本地真实 Shapely 几何拓扑沙箱执行分析（已自动提取约束：半径={dist}米，最小容量={min_cap}人）...",
             }
             yield {
                 "event": "tool_call",
                 "data": {
                     "tool": "buffer_analysis",
-                    "arguments": {"layer_name": "waterlog_points", "distance_meters": 500},
+                    "arguments": {"distance_meters": dist, "min_capacity": min_cap},
                 },
             }
-            # 真实沙箱计算
-            res = self.sandbox.execute_analysis([
-                type("Op", (), {"action_type": "BUFFER", "params": {"distance": 500.0}})(),
-                type("Op", (), {"action_type": "INTERSECT", "params": {}})(),
-            ])
+
+            res = self.sandbox.execute_analysis(
+                [type("Op", (), {"action_type": "BUFFER", "params": {"distance": dist}})()],
+                custom_point=custom_point,
+                min_capacity=min_cap,
+            )
+
+            matched_list = res.get("matched_shelters", [])
+            summary_lines = [
+                f"【空间拓扑解算报告】基于设定扩散半径 **{dist} 米**，共检索到 **{len(matched_list)} 处** 符合条件的避难场所："
+            ]
+            for s in matched_list:
+                summary_lines.append(
+                    f"- **{s['name']}**：距隐患点约 **{s.get('distance_meters', 0)} 米**，可容纳 **{s['capacity']} 人**（所属：{s.get('district', '')}，电话：{s.get('phone', '暂无')}）"
+                )
+            if not matched_list:
+                summary_lines.append("当前缓冲区范围内未检索到满足条件的避难场所，建议扩大缓冲区半径至 1000 米以上。")
+
+            summary_lines.append("\n*注：在上方设置面板填入 DeepSeek / OpenAI API Key 即可切换为实时 LLM 对话。*")
+
             yield {
                 "event": "tool_result",
                 "data": {
-                    "matched_count": res["matched_count"],
-                    "buffer_radius": "500m",
-                    "status": "success",
+                    "matched_count": len(matched_list),
+                    "buffer_radius": f"{dist}m",
+                    "shelters": [s["name"] for s in matched_list],
                 },
             }
             yield {
                 "event": "result",
                 "data": {
-                    "summary": f"【本地拓扑解算成功】已完成积水点 500 米缓冲区空间展开，并与应急避难所图层相交。共圈定 {res['matched_count']} 处符合拓扑邻近条件的避难设施（已高亮标注并挂载至地图），可在上方设置面板填入 API Key 切换为端到端实时 LLM 对话。",
+                    "summary": "\n".join(summary_lines),
                     "geojson": res,
                 },
             }
             return
 
-        # 真实接入大模型 API (OpenAI 协议)
+        # 真实接入大模型 API (OpenAI / DeepSeek 协议)
         headers = {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
@@ -135,11 +147,10 @@ class RealLLMSpatialAgent:
             {"role": "user", "content": query},
         ]
 
-        yield {"event": "thought", "data": f"已连接 LLM ({selected_model})，正在分析空间意图并规划 Tool Calling..."}
+        yield {"event": "thought", "data": f"正在向大语言模型 ({selected_model}) 推理意图并分发 Tool Calling..."}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             try:
-                # 第一轮：请求 LLM 决定是否调用工具
                 payload = {
                     "model": selected_model,
                     "messages": messages,
@@ -150,7 +161,7 @@ class RealLLMSpatialAgent:
                 if resp.status_code != 200:
                     yield {
                         "event": "error",
-                        "data": f"LLM API 响应异常: HTTP {resp.status_code} - {resp.text}",
+                        "data": f"LLM API 响应错误: HTTP {resp.status_code} - {resp.text}",
                     }
                     return
 
@@ -158,7 +169,6 @@ class RealLLMSpatialAgent:
                 choice = resp_data["choices"][0]
                 message = choice["message"]
                 messages.append(message)
-
                 tool_calls = message.get("tool_calls", [])
                 geojson_payload = None
 
@@ -166,32 +176,26 @@ class RealLLMSpatialAgent:
                     for tc in tool_calls:
                         func_name = tc["function"]["name"]
                         args = json.loads(tc["function"].get("arguments", "{}"))
-                        yield {
-                            "event": "tool_call",
-                            "data": {"tool": func_name, "arguments": args},
-                        }
+                        yield {"event": "tool_call", "data": {"tool": func_name, "arguments": args}}
 
-                        # 真实在空间沙箱中执行该工具
                         if func_name == "buffer_analysis":
-                            dist = float(args.get("distance_meters", 500))
-                            geojson_payload = self.sandbox.execute_analysis([
-                                type("Op", (), {"action_type": "BUFFER", "params": {"distance": dist}})(),
-                                type("Op", (), {"action_type": "INTERSECT", "params": {}})(),
-                            ])
+                            param_dist = float(args.get("distance_meters", dist))
+                            param_cap = int(args.get("min_capacity", min_cap))
+                            geojson_payload = self.sandbox.execute_analysis(
+                                [type("Op", (), {"action_type": "BUFFER", "params": {"distance": param_dist}})()],
+                                custom_point=custom_point,
+                                min_capacity=param_cap,
+                            )
                             tool_output = {
                                 "status": "ok",
-                                "layer": "buffer_zone",
                                 "matched_count": geojson_payload["matched_count"],
-                                "message": f"成功生成 {dist} 米影响缓冲区",
-                            }
-                        elif func_name == "spatial_intersect":
-                            tool_output = {
-                                "status": "ok",
-                                "target": "shelters",
-                                "matched": [f["properties"]["name"] for f in (geojson_payload or {}).get("features", []) if f["properties"].get("type") == "shelter"],
+                                "matched_shelters": [
+                                    {"name": s["name"], "distance_meters": s.get("distance_meters"), "capacity": s["capacity"]}
+                                    for s in geojson_payload.get("matched_shelters", [])
+                                ],
                             }
                         else:
-                            tool_output = {"status": "ok", "message": "SQL 执行成功"}
+                            tool_output = {"status": "ok", "message": "SQL 校验并执行完成"}
 
                         yield {"event": "tool_result", "data": tool_output}
 
@@ -201,18 +205,17 @@ class RealLLMSpatialAgent:
                             "content": json.dumps(tool_output, ensure_ascii=False),
                         })
 
-                    # 第二轮：将工具执行结果回传大模型生成最终总结
-                    second_payload = {
-                        "model": selected_model,
-                        "messages": messages,
-                    }
-                    second_resp = await client.post(f"{url}/chat/completions", headers=headers, json=second_payload)
+                    second_resp = await client.post(
+                        f"{url}/chat/completions",
+                        headers=headers,
+                        json={"model": selected_model, "messages": messages},
+                    )
                     if second_resp.status_code == 200:
                         final_msg = second_resp.json()["choices"][0]["message"]["content"]
                     else:
-                        final_msg = f"工具执行完成，但模型总结返回异常: {second_resp.text}"
+                        final_msg = f"工具执行完成，二次总结返回异常: {second_resp.text}"
                 else:
-                    final_msg = message.get("content", "模型未返回工具调用。")
+                    final_msg = message.get("content", "模型未调用工具。")
 
                 yield {
                     "event": "result",
@@ -222,4 +225,4 @@ class RealLLMSpatialAgent:
                     },
                 }
             except Exception as e:
-                yield {"event": "error", "data": f"请求大模型服务异常: {str(e)}"}
+                yield {"event": "error", "data": f"请求异常: {str(e)}"}

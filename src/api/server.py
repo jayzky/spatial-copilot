@@ -1,5 +1,5 @@
 import json
-from typing import Optional
+from typing import Optional, Dict
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -24,6 +24,7 @@ class QueryRequest(BaseModel):
     api_key: Optional[str] = ""
     base_url: Optional[str] = ""
     model: Optional[str] = ""
+    custom_point: Optional[Dict[str, float]] = None
 
 
 @app.post("/api/query/stream")
@@ -34,6 +35,7 @@ async def stream_query(req: QueryRequest):
             api_key=req.api_key,
             base_url=req.base_url,
             model=req.model,
+            custom_point=req.custom_point,
         ):
             yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
