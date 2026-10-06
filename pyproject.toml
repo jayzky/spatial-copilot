@@ -1,0 +1,16 @@
+[project]
+name = "spatial-copilot"
+version = "0.1.0"
+description = "Natural Language Driven Spatial Analysis Agent and Safe Sandbox Engine"
+authors = [{ name = "Zhang Kuo" }]
+dependencies = [
+    "fastapi>=0.110.0",
+    "pydantic>=2.0.0",
+    "shapely>=2.0.0",
+    "uvicorn>=0.28.0"
+]
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
