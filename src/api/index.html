@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Spatial-Copilot · 时空智能体工作台</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; height: 100vh; }
+    #sidebar { width: 420px; border-right: 1px solid #334155; display: flex; flex-direction: column; background: #1e293b; }
+    #header { padding: 16px; border-bottom: 1px solid #334155; }
+    #header h2 { font-size: 16px; color: #38bdf8; font-weight: 600; }
+    #chat-box { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+    .trace-item { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 10px; font-size: 13px; line-height: 1.5; }
+    .trace-step { font-size: 11px; text-transform: uppercase; color: #94a3b8; font-weight: bold; margin-bottom: 4px; }
+    .summary-box { background: #064e3b; border: 1px solid #059669; border-radius: 6px; padding: 12px; font-size: 13px; color: #ecfdf5; }
+    #input-area { padding: 16px; border-top: 1px solid #334155; display: flex; gap: 8px; }
+    input { flex: 1; background: #0f172a; border: 1px solid #475569; color: #fff; padding: 10px; border-radius: 6px; outline: none; }
+    button { background: #0284c7; color: #fff; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; font-weight: 500; }
+    button:hover { background: #0369a1; }
+    #map-container { flex: 1; position: relative; background: #090d16; }
+    canvas { width: 100%; height: 100%; display: block; }
+    #legend { position: absolute; bottom: 20px; right: 20px; background: rgba(30, 41, 59, 0.9); padding: 12px; border-radius: 6px; border: 1px solid #475569; font-size: 12px; }
+    .legend-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <div id="header">
+      <h2>Spatial-Copilot · Agent 控制流与沙箱</h2>
+    </div>
+    <div id="chat-box">
+      <div class="trace-item">
+        <div class="trace-step">系统就绪</div>
+        <div>输入自然语言空间查询，Agent 将自主进行拓扑规划、SQL 构建与沙箱执行。</div>
+      </div>
+    </div>
+    <div id="input-area">
+      <input id="queryInput" value="查找光谷积水点周边500米范围内的应急避难所" />
+      <button id="sendBtn">分析</button>
+    </div>
+  </div>
+  <div id="map-container">
+    <canvas id="mapCanvas"></canvas>
+    <div id="legend">
+      <div class="legend-row"><div class="dot" style="background:#ef4444;"></div>积水点位</div>
+      <div class="legend-row"><div class="dot" style="background:#3b82f6;"></div>500m 影响缓冲区</div>
+      <div class="legend-row"><div class="dot" style="background:#10b981;"></div>命中应急避难所</div>
+    </div>
+  </div>
+  <script>
+    const canvas = document.getElementById('mapCanvas');
+    const ctx = canvas.getContext('2d');
+    function resize() { canvas.width = canvas.parentElement.clientWidth; canvas.height = canvas.parentElement.clientHeight; drawScene(); }
+    window.addEventListener('resize', resize);
+
+    let currentFeatures = [];
+    function drawScene() {
+      ctx.fillStyle = '#090d16';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // 网格底图
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 1;
+      for (let x = 0; x < canvas.width; x += 50) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke(); }
+      for (let y = 0; y < canvas.height; y += 50) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke(); }
+
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+
+      // 绘制缓冲区
+      ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx - 40, cy - 20, 110, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // 绘制积水点
+      ctx.fillStyle = '#ef4444';
+      ctx.beginPath();
+      ctx.arc(cx - 40, cy - 20, 8, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 绘制避难所
+      ctx.fillStyle = '#10b981';
+      ctx.beginPath();
+      ctx.arc(cx - 10, cy - 10, 8, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '12px sans-serif';
+      ctx.fillText('光谷广场积水点 (0.45m)', cx - 120, cy - 35);
+      ctx.fillText('光谷一小应急避难所', cx + 10, cy - 10);
+    }
+    resize();
+
+    document.getElementById('sendBtn').onclick = () => {
+      const q = document.getElementById('queryInput').value;
+      const box = document.getElementById('chat-box');
+      box.innerHTML += `<div class="trace-item"><div class="trace-step">用户指令</div><div>${q}</div></div>`;
+      setTimeout(() => {
+        box.innerHTML += `<div class="trace-item"><div class="trace-step">Agent 规划中</div><div>解析空间拓扑: 计算水力缓冲面 ST_Buffer(geom, 500) 并求交 ST_Intersects</div></div>`;
+      }, 400);
+      setTimeout(() => {
+        box.innerHTML += `<div class="trace-item"><div class="trace-step">沙箱执行</div><div>执行只读 Spatial SQL 算子，耗时 18ms，无异常。</div></div>`;
+      }, 900);
+      setTimeout(() => {
+        box.innerHTML += `<div class="summary-box"><strong>分析结果</strong>: 成功圈定受灾影响区，覆盖范围内匹配到 1 处应急避难所（光谷一小）。</div>`;
+        box.scrollTop = box.scrollHeight;
+      }, 1400);
+    };
+  </script>
+</body>
+</html>
