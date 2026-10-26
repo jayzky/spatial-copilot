@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="./vendor/leaflet.css" />
   <script src="./vendor/leaflet.js"></script>
   <!-- 图标库 -->
-  <script src="https://unpkg.com/lucide@latest"></script>
+  <script defer src="https://unpkg.com/lucide@0.468.0"></script>
   <style>
     :root {
       --bg-dark: #0b0f19;
@@ -315,7 +315,7 @@
     <div class="brand">
       <i data-lucide="compass" style="color:var(--accent-blue);width:18px;height:18px;"></i>
       <span>Spatial-Copilot</span>
-      <span style="font-size: 11px; color: var(--text-muted); font-weight: normal;">· 自然语言驱动的城市防汛空间决策中台</span>
+      <span style="font-size: 11px; color: var(--text-muted); font-weight: normal;">· 空间分析演示 · 非实时监测</span>
     </div>
     <div class="header-actions">
       <button class="btn-header" id="btn-toggle-table">
@@ -338,13 +338,14 @@
     <!-- Left Sidebar -->
     <aside id="sidebar">
       <div id="config-drawer">
+        <div class="form-row"><label for="analysis-mode">运行模式</label><select id="analysis-mode"><option value="local">本地规则模式（无需密钥）</option><option value="remote">远程模型模式</option></select></div>
         <div class="form-row">
           <label>API Base URL (OpenAI 协议)</label>
-          <input type="text" id="api-base-url" value="https://api.deepseek.com" />
+          <input type="text" id="api-base-url" placeholder="留空使用服务器配置地址" />
         </div>
         <div class="form-row">
           <label>API Key</label>
-          <input type="password" id="api-key" placeholder="填入 sk-... 即可开启实时大模型端到端调用" />
+          <input type="password" id="api-key" placeholder="仅远程模式使用，不保存到浏览器" />
         </div>
         <div class="form-row">
           <label>模型选择</label>
@@ -357,13 +358,14 @@
         </div>
       </div>
 
+      <div id="mode-status" role="status" style="padding:10px 16px;color:#fbbf24;font-size:12px;">本地规则模式 · 自建演示数据</div>
       <div id="trace-panel">
         <div class="trace-card">
           <div class="trace-title title-thought">
             <i data-lucide="bot" style="width:14px;height:14px;"></i>
             <span>Spatial Agent 已就绪</span>
           </div>
-          <div>系统底图已自适应就绪。支持通过下方输入框提问，或点击地图右上角工具在任意地点点选积水点进行空间决策。</div>
+          <div>点位和容量为自建演示数据。请通过服务地址打开页面；可输入半径与最低容量，或在武汉演示区域内点选分析点。</div>
         </div>
       </div>
 
@@ -392,6 +394,7 @@
           <i data-lucide="map-pin" style="width:14px;height:14px;"></i>
           <span id="txt-pick">地图点选隐患点 (关)</span>
         </button>
+        <button class="tool-btn" id="btn-clear-point">清除自定义点</button>
         <span style="color:#64748b;">|</span>
         <span style="color:var(--text-muted);font-size:11px;">缓冲区:</span>
         <select id="buffer-select" style="background:#1f2937;border:1px solid #475569;color:#fff;padding:2px 6px;border-radius:4px;font-size:12px;">
@@ -401,27 +404,24 @@
         </select>
       </div>
 
-      <!-- 底图多源高可用切换器 (AutoNavi / OSM / Satellite / Dark) -->
       <div class="basemap-picker">
-        <button class="basemap-opt active" id="bm-amap" onclick="switchBasemap('amap')">高德标准道路 (国内秒开)</button>
-        <button class="basemap-opt" id="bm-osm" onclick="switchBasemap('osm')">开源 OSM 标准底图</button>
-        <button class="basemap-opt" id="bm-satellite" onclick="switchBasemap('satellite')">遥感卫星实景</button>
-        <button class="basemap-opt" id="bm-dark" onclick="switchBasemap('dark')">Carto 极客暗黑</button>
+        <button class="basemap-opt active" id="bm-osm" onclick="switchBasemap('osm')">OSM 标准底图</button>
+        <button class="basemap-opt" id="bm-dark" onclick="switchBasemap('dark')">Carto 暗色底图</button>
       </div>
 
       <!-- Map Legend -->
       <div class="map-legend">
         <div class="legend-item">
           <div class="legend-color" style="background: var(--accent-rose); box-shadow: 0 0 6px var(--accent-rose);"></div>
-          <span>暴雨积水隐患点 (淹没点位)</span>
+          <span>自建积水样例点</span>
         </div>
         <div class="legend-item">
           <div class="legend-color" style="background: var(--accent-blue);"></div>
-          <span>扩散影响缓冲区 (ST_Buffer)</span>
+          <span>局部米制缓冲区</span>
         </div>
         <div class="legend-item">
           <div class="legend-color" style="background: var(--accent-emerald); box-shadow: 0 0 6px var(--accent-emerald);"></div>
-          <span>命中可用避难场所 (已求交匹配)</span>
+          <span>符合条件的演示设施</span>
         </div>
       </div>
 
@@ -441,8 +441,8 @@
                 <th>所属行政区</th>
                 <th>距隐患点距离</th>
                 <th>可容纳人数 (Capacity)</th>
-                <th>应急联系电话</th>
-                <th>处置状态</th>
+                <th>联系电话</th>
+                <th>数据来源</th>
               </tr>
             </thead>
             <tbody id="table-body">
@@ -455,353 +455,201 @@
   </div>
 
   <script>
-    if (window.lucide) lucide.createIcons();
-
-    // Toggle Config Drawer
-    document.getElementById('toggle-config-btn').onclick = () => {
-      const d = document.getElementById('config-drawer');
-      d.style.display = d.style.display === 'block' ? 'none' : 'block';
-    };
-
-    // Toggle Attribute Table Drawer
-    document.getElementById('btn-toggle-table').onclick = () => {
-      const d = document.getElementById('table-drawer');
-      d.style.display = d.style.display === 'flex' ? 'none' : 'flex';
-    };
-
-    function setQuery(q) {
-      document.getElementById('query-input').value = q;
-    }
-
-    // ==========================================
-    // 底图多源高可用配置：高德标准瓦片（免Key/国内毫秒级必显）+ OSM + 卫星实景 + Carto
-    // ==========================================
+    function icons() { if (window.lucide) window.lucide.createIcons(); }
+    window.addEventListener('load', icons);
+    const endpoint = location.protocol === 'file:' ? 'http://127.0.0.1:8000' : '';
+    const map = L.map('map', {center:[30.495,114.405],zoom:13,zoomControl:false});
     const basemaps = {
-      // 1. 高德矢量高清底图（在中国大陆 100% 毫秒级直连加载，中文清晰）
-      amap: L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
-        subdomains: ['1', '2', '3', '4'],
-        maxZoom: 18,
-        attribution: '&copy; 高德地图 AutoNavi'
-      }),
-      // 2. 开源官方 OpenStreetMap 瓦片
-      osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-      }),
-      // 3. 高德高分辨率卫星实景
-      satellite: L.tileLayer('https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}', {
-        subdomains: ['1', '2', '3', '4'],
-        maxZoom: 18,
-        attribution: '&copy; 高德实景影像 AutoNavi'
-      }),
-      // 4. Carto 极客暗黑
-      dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        subdomains: 'abcd',
-        maxZoom: 19,
-        attribution: '&copy; CARTO'
-      })
+      osm:L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}),
+      dark:L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© CARTO'})
     };
-
-    // 初始化地图（默认采用 100% 极速加载的高德底图，避免 OSM 连接重置导致白屏）
-    const map = L.map('map', {
-      center: [30.495, 114.405],
-      zoom: 13,
-      layers: [basemaps.amap],
-      zoomControl: false
-    });
-    L.control.zoom({ position: 'bottomright' }).addTo(map);
-
-    // 核心：延迟强制重绘，彻底解决在任何浏览器中容器尺寸未计算导致的底图空白！
-    setTimeout(() => { map.invalidateSize(true); }, 250);
-    window.addEventListener('resize', () => { map.invalidateSize(); });
+    basemaps.osm.addTo(map);
+    L.control.zoom({position:'bottomright'}).addTo(map);
+    const layerGroup = L.layerGroup().addTo(map);
+    window.addEventListener('resize', () => map.invalidateSize());
+    const tracePanel = document.getElementById('trace-panel');
+    const submit = document.getElementById('submit-btn');
+    const exportButton = document.getElementById('btn-export-geojson');
+    const modeStatus = document.getElementById('mode-status');
+    let initialPoints = [], initialShelters = [], customPickedPoint = null;
+    let latestGeoJson = null, isPickMode = false, running = false;
+    exportButton.disabled = true;
 
     function switchBasemap(name) {
-      Object.values(basemaps).forEach(l => map.removeLayer(l));
+      if (!basemaps[name]) return;
+      Object.values(basemaps).forEach(layer => map.removeLayer(layer));
       basemaps[name].addTo(map);
-      document.querySelectorAll('.basemap-opt').forEach(btn => btn.classList.remove('active'));
-      document.getElementById(`bm-${name}`).classList.add('active');
+      document.querySelectorAll('.basemap-opt').forEach(btn => btn.classList.toggle('active',btn.id === 'bm-'+name));
     }
-
-    // 要素图层组
-    const layerGroup = L.layerGroup().addTo(map);
-
-    const initialPoints = [
-      { id: 1, name: "光谷广场下穿通道积水点", lat: 30.505, lon: 114.401, depth: 0.55 },
-      { id: 2, name: "关山大道新竹路交叉口", lat: 30.492, lon: 114.418, depth: 0.38 },
-      { id: 3, name: "光谷软件园中路积水隐患点", lat: 30.478, lon: 114.412, depth: 0.42 },
-      { id: 4, name: "南湖大道茶山刘积水点", lat: 30.485, lon: 114.375, depth: 0.62 },
-      { id: 5, name: "华中农业大学东门狮子山路", lat: 30.472, lon: 114.368, depth: 0.28 }
-    ];
-
-    const initialShelters = [
-      { id: 101, name: "华中农业大学体育馆", lat: 30.475, lon: 114.358, capacity: 3500, district: "洪山区", phone: "027-87282001" },
-      { id: 102, name: "中南财经政法大学艺体中心", lat: 30.481, lon: 114.388, capacity: 2800, district: "洪山区", phone: "027-88386110" },
-      { id: 103, name: "华中科技大学光谷体育馆", lat: 30.512, lon: 114.415, capacity: 6000, district: "洪山区", phone: "027-87541114" },
-      { id: 104, name: "光谷一小应急避难场所", lat: 30.503, lon: 114.403, capacity: 1500, district: "东湖高新区", phone: "027-87171002" },
-      { id: 105, name: "光谷二小体育馆", lat: 30.485, lon: 114.425, capacity: 1800, district: "东湖高新区", phone: "027-87172005" },
-      { id: 106, name: "光谷实验中学避难点", lat: 30.470, lon: 114.420, capacity: 2200, district: "东湖高新区", phone: "027-87173008" },
-      { id: 107, name: "武汉工程大学流芳校区体育馆", lat: 30.460, lon: 114.432, capacity: 4000, district: "江夏区", phone: "027-87992010" }
-    ];
-
+    document.getElementById('toggle-config-btn').onclick = () => {
+      const drawer = document.getElementById('config-drawer');
+      drawer.style.display = drawer.style.display === 'block' ? 'none' : 'block';
+    };
+    document.getElementById('btn-toggle-table').onclick = () => {
+      const drawer = document.getElementById('table-drawer');
+      drawer.style.display = drawer.style.display === 'flex' ? 'none' : 'flex';
+    };
+    function showRadius(radius) {
+      const select=document.getElementById('buffer-select');
+      const previous=document.getElementById('custom-radius-option');if(previous)previous.remove();
+      if(![...select.options].some(option=>Number(option.value)===radius)){
+        const option=document.createElement('option');option.id='custom-radius-option';option.value=String(radius);option.textContent=radius+' 米（输入）';select.append(option);
+      }
+      select.value=String(radius);
+    }
+    function syncRadius(query) {
+      const match=query.match(/([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*(公里|千米|km|米|m)(?![a-z])/i);
+      if(match){const radius=Number(match[1])*(/公里|千米|km/i.test(match[2])?1000:1);if(Number.isFinite(radius)&&radius>0&&radius<=50000)showRadius(radius);}
+    }
+    function setQuery(query) { document.getElementById('query-input').value = query;syncRadius(query); }
+    document.getElementById('query-input').addEventListener('input',event=>syncRadius(event.target.value));
+    document.getElementById('buffer-select').onchange = event => {
+      const input = document.getElementById('query-input');
+      const unit = /[+-]?(?:\d+(?:\.\d*)?|\.\d+)\s*(?:公里|千米|km|米|m)(?![a-z])/i;
+      input.value = unit.test(input.value) ? input.value.replace(unit,event.target.value+'米') : input.value+' 半径'+event.target.value+'米';
+    };
+    function popup(title, lines) {
+      const box = document.createElement('div');
+      const heading = document.createElement('strong'); heading.textContent = title; box.append(heading);
+      for (const line of lines) { const row = document.createElement('div'); row.textContent = line; box.append(row); }
+      return box;
+    }
     function renderBaseElements() {
       layerGroup.clearLayers();
-      initialPoints.forEach(p => {
-        L.circleMarker([p.lat, p.lon], {
-          radius: 8,
-          fillColor: '#f43f5e',
-          color: '#ffffff',
-          weight: 2,
-          fillOpacity: 0.95
-        }).bindPopup(`<b>${p.name}</b><br/>积水深度: ${p.depth}m<br/>坐标: [${p.lat}, ${p.lon}]`).addTo(layerGroup);
-      });
-
-      initialShelters.forEach(s => {
-        L.circleMarker([s.lat, s.lon], {
-          radius: 7,
-          fillColor: '#64748b',
-          color: '#ffffff',
-          weight: 1.5,
-          fillOpacity: 0.7
-        }).bindPopup(`<b>${s.name}</b><br/>容纳人数: ${s.capacity} 人<br/>所属: ${s.district}<br/>电话: ${s.phone}`).addTo(layerGroup);
-      });
+      for (const item of [...initialPoints,...initialShelters]) {
+        const coords = item.geometry.coordinates;
+        const isShelter = item.capacity !== undefined;
+        L.circleMarker([coords[1],coords[0]],{radius:7,color:'#fff',weight:1,fillOpacity:.8,fillColor:isShelter?'#64748b':'#f43f5e'})
+          .bindPopup(popup(item.name,['自建演示数据',isShelter?'模拟容量：'+item.capacity+' 人':'模拟深度：'+item.water_depth+' 米'])).addTo(layerGroup);
+      }
+      if (customPickedPoint) L.circleMarker([customPickedPoint.lat,customPickedPoint.lon],{radius:10,color:'#fbbf24'}).addTo(layerGroup);
     }
-    renderBaseElements();
-
-    // 地图点选测点
-    let isPickMode = false;
-    let customPickedPoint = null;
-    const btnPick = document.getElementById('btn-pick-point');
-    const txtPick = document.getElementById('txt-pick');
-
-    btnPick.onclick = () => {
-      isPickMode = !isPickMode;
-      btnPick.classList.toggle('active', isPickMode);
-      txtPick.innerText = isPickMode ? '地图点选模式 (已开启，请点击地图)' : '地图点选隐患点 (关)';
-      map.getContainer().style.cursor = isPickMode ? 'crosshair' : '';
-    };
-
-    map.on('click', (e) => {
-      if (!isPickMode) return;
-      const { lat, lng } = e.latlng;
-      customPickedPoint = { lat: parseFloat(lat.toFixed(5)), lon: parseFloat(lng.toFixed(5)) };
-      
-      L.circleMarker([lat, lng], {
-        radius: 11,
-        fillColor: '#f59e0b',
-        color: '#ffffff',
-        weight: 3,
-        fillOpacity: 1
-      }).bindPopup(`<b>用户自定义测点</b><br/>坐标: [${lat.toFixed(4)}, ${lng.toFixed(4)}]`).addTo(layerGroup).openPopup();
-
-      document.getElementById('query-input').value = `在坐标点 [${lat.toFixed(4)}, ${lng.toFixed(4)}] 周边 1000 米范围内筛选可用避难所`;
-      isPickMode = false;
-      btnPick.classList.remove('active');
-      txtPick.innerText = '地图点选隐患点 (关)';
-      map.getContainer().style.cursor = '';
-
+    function pickState(value) {
+      isPickMode = value;
+      document.getElementById('btn-pick-point').classList.toggle('active',value);
+      document.getElementById('txt-pick').textContent = value ? '点选模式：请点击武汉演示区域' : '地图点选分析点（关）';
+      map.getContainer().style.cursor = value ? 'crosshair' : '';
+    }
+    document.getElementById('btn-pick-point').onclick = () => { if (!running) pickState(!isPickMode); };
+    document.getElementById('btn-clear-point').onclick = () => { if (!running) {customPickedPoint=null;latestGeoJson=null;exportButton.disabled=true;pickState(false);renderBaseElements();populateTable([],'已清除自定义点，请重新分析');} };
+    map.on('click', event => {
+      if (!isPickMode || running) return;
+      customPickedPoint = {lat:Number(event.latlng.lat.toFixed(6)),lon:Number(event.latlng.lng.toFixed(6))};
+      pickState(false); renderBaseElements();
+      setQuery('分析该点周边'+document.getElementById('buffer-select').value+'米范围的演示设施');
       executeAnalysis();
     });
-
-    let latestGeoJson = null;
-
-    function populateTable(shelters) {
-      const tbody = document.getElementById('table-body');
-      if (!shelters || shelters.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#64748b;">未检索到覆盖范围内的避难场所</td></tr>';
-        return;
+    function populateTable(shelters, emptyText='当前条件下无匹配设施') {
+      const body = document.getElementById('table-body'); body.replaceChildren();
+      if (!shelters.length) {
+        const row = body.insertRow(), cell = row.insertCell(); cell.colSpan=6; cell.textContent=emptyText; return;
       }
-      tbody.innerHTML = shelters.map(s => `
-        <tr>
-          <td><strong style="color:#38bdf8;">${s.name}</strong></td>
-          <td>${s.district || '东湖高新区'}</td>
-          <td><span style="color:#10b981;font-weight:700;">${s.distance_meters || '--'} 米</span></td>
-          <td>${s.capacity} 人</td>
-          <td>${s.phone || '027-87000000'}</td>
-          <td><span style="padding:2px 8px;border-radius:4px;background:rgba(16,185,129,0.2);color:#10b981;font-size:11px;">开放接纳中</span></td>
-        </tr>
-      `).join('');
-      document.getElementById('table-drawer').style.display = 'flex';
+      for (const item of shelters) {
+        const row = body.insertRow();
+        for (const text of [item.name,item.district??'未提供',(item.distance_meters??'—')+' 米',item.capacity+' 人','未提供','自建演示']) {
+          row.insertCell().textContent = text;
+        }
+      }
+      document.getElementById('table-drawer').style.display='flex';
     }
-
     function renderFeatures(geojson) {
-      if (!geojson || !geojson.features) return;
-      latestGeoJson = geojson;
+      if (!geojson || geojson.type!=='FeatureCollection' || !Array.isArray(geojson.features)) throw new Error('地图结果格式无效');
       layerGroup.clearLayers();
-
-      const matchedShelters = [];
-
-      geojson.features.forEach(f => {
-        const p = f.properties || {};
-        if (p.type === 'waterlog') {
-          const c = f.geometry.coordinates;
-          L.circleMarker([c[1], c[0]], {
-            radius: 9,
-            fillColor: '#f43f5e',
-            color: '#fff',
-            weight: 2,
-            fillOpacity: 1
-          }).bindPopup(`<b>${p.name}</b><br/>积水深度: ${p.depth}m<br/>危险等级: ${p.severity}`).addTo(layerGroup);
-        } else if (p.type === 'buffer_zone') {
-          const coords = f.geometry.coordinates[0].map(pt => [pt[1], pt[0]]);
-          L.polygon(coords, {
-            color: '#0284c7',
-            weight: 2,
-            fillColor: '#38bdf8',
-            fillOpacity: 0.25,
-            dashArray: '5,5'
-          }).bindPopup(`<b>${p.target_point || '积水影响区'}</b><br/>缓冲区半径: ${p.distance} 米`).addTo(layerGroup);
-        } else if (p.type === 'shelter') {
-          matchedShelters.push(p);
-          const c = f.geometry.coordinates;
-          L.circleMarker([c[1], c[0]], {
-            radius: 8,
-            fillColor: '#10b981',
-            color: '#ffffff',
-            weight: 2.5,
-            fillOpacity: 1
-          }).bindPopup(`<b>${p.name} (已命中)</b><br/>距测点: ${p.distance_meters || '--'} 米<br/>容纳量: ${p.capacity} 人<br/>电话: ${p.phone}`).addTo(layerGroup);
-        }
-      });
-
-      populateTable(geojson.matched_shelters || matchedShelters);
+      for (const feature of geojson.features) {
+        const props = feature.properties??{};
+        const color = props.type==='shelter'?'#10b981':props.type==='waterlog'?'#f43f5e':'#38bdf8';
+        L.geoJSON(feature,{
+          style:{color,weight:2,fillOpacity:.2},
+          pointToLayer:(f,latlng)=>L.circleMarker(latlng,{radius:8,color:'#fff',weight:1,fillOpacity:.9,fillColor:color}),
+          onEachFeature:(f,layer)=>layer.bindPopup(popup(props.name??props.target_point??'演示缓冲区',[
+            '自建演示数据',props.type==='shelter'?'距离：'+props.distance_meters+' 米；容量：'+props.capacity+' 人':props.type==='buffer_zone'?'半径：'+props.distance+' 米':'非实时积水数据'
+          ]))
+        }).addTo(layerGroup);
+      }
+      latestGeoJson=geojson;exportButton.disabled=false;
+      if(geojson.parameters)showRadius(geojson.parameters.distance_meters);
+      populateTable(geojson.matched_shelters??[]);
     }
-
-    document.getElementById('btn-export-geojson').onclick = () => {
-      const dataToExport = latestGeoJson || { type: "FeatureCollection", features: [] };
-      const blob = new Blob([JSON.stringify(dataToExport, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `spatial_analysis_result_${Date.now()}.geojson`;
-      a.click();
-      URL.revokeObjectURL(url);
-    };
-
-    const tracePanel = document.getElementById('trace-panel');
-
     function addTrace(type, title, text, code) {
-      const card = document.createElement('div');
-      card.className = 'trace-card';
-      let titleClass = 'title-thought';
-      let icon = 'bot';
-
-      if (type === 'tool') { titleClass = 'title-tool'; icon = 'wrench'; }
-      else if (type === 'result') { titleClass = 'title-result'; icon = 'check-circle-2'; }
-      else if (type === 'user') { titleClass = 'title-user'; icon = 'user'; }
-
-      card.innerHTML = `
-        <div class="trace-title ${titleClass}">
-          <i data-lucide="${icon}" style="width:14px;height:14px;"></i>
-          <span>${title}</span>
-        </div>
-        <div>${text}</div>
-        ${code ? `<pre class="code-block">${code}</pre>` : ''}
-      `;
-      tracePanel.appendChild(card);
-      if (window.lucide) lucide.createIcons();
-      tracePanel.scrollTop = tracePanel.scrollHeight;
+      const card=document.createElement('div');card.className='trace-card';
+      if (type==='error') card.style.borderColor='#f43f5e';
+      const heading=document.createElement('div');heading.className='trace-title title-'+(type==='result'?'result':type==='user'?'user':type==='tool'?'tool':'thought');
+      heading.textContent=title;
+      const content=document.createElement('div');content.textContent=String(text??'');content.style.whiteSpace='pre-wrap';content.style.overflowWrap='anywhere';
+      card.append(heading,content);
+      if(code){const pre=document.createElement('pre');pre.className='code-block';pre.textContent=code;card.append(pre);}
+      tracePanel.append(card);tracePanel.scrollTop=tracePanel.scrollHeight;
     }
-
+    exportButton.onclick=()=>{
+      if(!latestGeoJson)return;
+      const url=URL.createObjectURL(new Blob([JSON.stringify(latestGeoJson,null,2)],{type:'application/geo+json'}));
+      const link=document.createElement('a');link.href=url;link.download='spatial_demo_'+Date.now()+'.geojson';link.click();URL.revokeObjectURL(url);
+    };
     async function executeAnalysis() {
-      const query = document.getElementById('query-input').value.trim();
-      if (!query) return;
-
-      addTrace('user', '用户时空指令', query);
-
-      const payload = {
-        query: query,
-        api_key: document.getElementById('api-key').value.trim(),
-        base_url: document.getElementById('api-base-url').value.trim(),
-        model: document.getElementById('api-model').value,
-        custom_point: customPickedPoint
-      };
-
-      try {
-        const resp = await fetch('http://127.0.0.1:8000/api/query/stream', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+      const query=document.getElementById('query-input').value.trim();if(!query||running)return;
+      running=true;submit.disabled=true;latestGeoJson=null;exportButton.disabled=true;
+      renderBaseElements();populateTable([],'分析中，等待后端结果');
+      addTrace('user','分析请求',query);
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),65000);
+      let reader;
+      try{
+        const response=await fetch(endpoint+'/api/query/stream',{
+          method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
+          body:JSON.stringify({
+            query,mode:document.getElementById('analysis-mode').value,
+            api_key:document.getElementById('api-key').value.trim(),
+            base_url:document.getElementById('api-base-url').value.trim(),
+            model:document.getElementById('api-model').value,custom_point:customPickedPoint
+          })
         });
-
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder('utf-8');
-        let buffer = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n\n');
-          buffer = lines.pop();
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = JSON.parse(line.substring(6));
-              if (data.event === 'thought') {
-                addTrace('thought', 'Agent 思考与规划', data.data);
-              } else if (data.event === 'tool_call') {
-                addTrace('tool', `调度工具: ${data.data.tool}`, '参数构建完成', JSON.stringify(data.data.arguments, null, 2));
-              } else if (data.event === 'tool_result') {
-                addTrace('tool', '沙箱执行结果', '空间拓扑计算完成', JSON.stringify(data.data, null, 2));
-              } else if (data.event === 'result') {
-                addTrace('result', '综合防汛报告', data.data.summary);
-                renderFeatures(data.data.geojson);
-              } else if (data.event === 'error') {
-                addTrace('tool', '错误告警', data.data);
-              }
-            }
+        if(!response.ok){
+          let message='请求失败，HTTP '+response.status;
+          try{const body=await response.json();if(Array.isArray(body.detail))message=body.detail.map(e=>e.loc.join('.')+': '+e.msg).join('\n');}catch{message+='（服务未返回可读错误详情）';}
+          throw new Error(message);
+        }
+        if(!response.body)throw new Error('服务未返回事件流');
+        reader=response.body.getReader();const decoder=new TextDecoder();let buffer='',terminal=false;
+        function frame(block){
+          const data=block.split(/\r?\n/).filter(line=>line.startsWith('data:')).map(line=>line.slice(5).trimStart()).join('\n');
+          if(!data)return;
+          const item=JSON.parse(data);
+          if(item.event==='mode'){
+            modeStatus.textContent=(item.data.mode==='remote'?'远程模型模式':'本地规则模式')+' · 自建演示数据';
+          }else if(item.event==='thought')addTrace('thought','执行状态',item.data);
+          else if(item.event==='tool_call')addTrace('tool','工具调用：'+item.data.tool,'校验后的执行参数',JSON.stringify(item.data.arguments,null,2));
+          else if(item.event==='tool_result')addTrace('tool','计算结果','空间分析已返回',JSON.stringify(item.data,null,2));
+          else if(item.event==='error')throw new Error(item.data.message??String(item.data));
+          else if(item.event==='result'){
+            renderFeatures(item.data.geojson);addTrace('result','演示分析结果',item.data.summary);terminal=true;
           }
         }
-      } catch (err) {
-        addTrace('thought', '本地拓扑计算', '未检测到远程后端 8000 端口，正在使用内嵌空间引擎解算...');
-        addTrace('tool', '调度算子: buffer_analysis', '已执行空间缓冲区生成与相交求交');
-        
-        const r_deg = (parseInt(document.getElementById('buffer-select').value) || 500) / 111319.0;
-        const features = [];
-        
-        const centerPoints = customPickedPoint ? [customPickedPoint] : initialPoints;
-        centerPoints.forEach(pt => {
-          features.push({
-            type: "Feature",
-            geometry: { type: "Point", coordinates: [pt.lon, pt.lat] },
-            properties: { type: "waterlog", name: pt.name || "自定义测点", depth: pt.depth || 0.45, severity: "高危" }
-          });
-          const polyCoords = [];
-          for (let a = 0; a <= 360; a += 15) {
-            const rad = a * Math.PI / 180;
-            polyCoords.push([pt.lon + r_deg * Math.cos(rad), pt.lat + r_deg * Math.sin(rad)]);
+        while(!terminal){
+          const {done,value}=await reader.read();buffer+=done?decoder.decode():decoder.decode(value,{stream:true});
+          let separator;
+          while(!terminal&&(separator=/\r?\n\r?\n/.exec(buffer))){
+            const block=buffer.slice(0,separator.index);buffer=buffer.slice(separator.index+separator[0].length);frame(block);
           }
-          features.push({
-            type: "Feature",
-            geometry: { type: "Polygon", coordinates: [polyCoords] },
-            properties: { type: "buffer_zone", distance: Math.round(r_deg * 111319), target_point: pt.name || "自定义测点" }
-          });
-        });
-
-        const matched = [];
-        initialShelters.forEach(s => {
-          centerPoints.forEach(pt => {
-            const dist = Math.hypot((s.lon - pt.lon) * 111319, (s.lat - pt.lat) * 111319);
-            if (dist <= r_deg * 111319) {
-              const sc = Object.assign({}, s, { distance_meters: Math.round(dist) });
-              matched.push(sc);
-              features.push({
-                type: "Feature",
-                geometry: { type: "Point", coordinates: [s.lon, s.lat] },
-                properties: Object.assign({ type: "shelter" }, sc)
-              });
-            }
-          });
-        });
-
-        const offlineResult = { type: "FeatureCollection", features: features, matched_shelters: matched };
-        renderFeatures(offlineResult);
-
-        addTrace('result', '综合防汛报告', `【分析成功】基于设定半径检索到 ${matched.length} 处避难场所。可在下方查看完整属性数据表，或点击“导出 GeoJSON”下载图层。在右上角配置 API Key 即可接入实时大模型。`);
+          if(done){if(!terminal&&buffer.trim())frame(buffer);break;}
+        }
+        if(!terminal)throw new Error('事件流提前结束，尚未取得分析结果');
+      }catch(error){
+        latestGeoJson=null;exportButton.disabled=true;renderBaseElements();populateTable([],'分析未完成');
+        addTrace('error','分析失败',error.name==='AbortError'?'请求超时，请重试。':error.message);
+      }finally{
+        clearTimeout(timer);if(reader){try{await reader.cancel();}catch(error){console.warn('事件流清理失败：'+error.name);}reader.releaseLock();}
+        running=false;submit.disabled=false;
       }
     }
-
-    document.getElementById('submit-btn').onclick = executeAnalysis;
+    document.getElementById('submit-btn').onclick=executeAnalysis;
+    document.getElementById('query-input').addEventListener('keydown',event=>{if(event.key==='Enter')executeAnalysis();});
+    (async()=>{
+      try{
+        const response=await fetch(endpoint+'/api/demo');if(!response.ok)throw new Error('演示图层加载失败');
+        const data=await response.json();initialPoints=data.waterlog_points;initialShelters=data.shelters;renderBaseElements();
+      }catch{
+        addTrace('error','服务未就绪','请通过 http://127.0.0.1:8000/ 服务入口打开；底图瓦片依赖网络，空间计算使用本机后端。');
+      }
+    })();
   </script>
 </body>
 </html>
