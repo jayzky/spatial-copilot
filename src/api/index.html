@@ -173,7 +173,7 @@
       font-size: 13px;
       outline: none;
     }
-    #submit-btn {
+    #submit-btn, #cancel-btn {
       background: linear-gradient(135deg, #0284c7, #2563eb);
       color: #fff;
       border: none;
@@ -185,6 +185,10 @@
       align-items: center;
       gap: 6px;
     }
+    #submit-btn:disabled { opacity: .6; cursor: wait; }
+    #cancel-btn { background: #9f1239; }
+    #cancel-btn[hidden] { display: none; }
+    #analysis-status { padding: 0 16px 8px; color: var(--text-muted); font-size: 12px; }
 
     /* Right Map Viewport */
     #map-viewport {
@@ -359,6 +363,7 @@
       </div>
 
       <div id="mode-status" role="status" style="padding:10px 16px;color:#fbbf24;font-size:12px;">本地规则模式 · 自建演示数据</div>
+      <div id="analysis-status" role="status" aria-live="polite">等待分析请求</div>
       <div id="trace-panel">
         <div class="trace-card">
           <div class="trace-title title-thought">
@@ -381,6 +386,7 @@
           <span>分析</span>
           <i data-lucide="send" style="width:14px;height:14px;"></i>
         </button>
+        <button id="cancel-btn" hidden>停止</button>
       </div>
     </aside>
 
@@ -454,7 +460,8 @@
     </main>
   </div>
 
-  <script>
+  <script type="module">
+    import {AnalysisClient, AnalysisCancelledError} from './analysis-client.mjs';
     function icons() { if (window.lucide) window.lucide.createIcons(); }
     window.addEventListener('load', icons);
     const endpoint = location.protocol === 'file:' ? 'http://127.0.0.1:8000' : '';
@@ -471,8 +478,12 @@
     const submit = document.getElementById('submit-btn');
     const exportButton = document.getElementById('btn-export-geojson');
     const modeStatus = document.getElementById('mode-status');
+    const analysisStatus = document.getElementById('analysis-status');
+    const cancelButton = document.getElementById('cancel-btn');
+    const analysisClient = new AnalysisClient({url:endpoint+'/api/query/stream'});
     let initialPoints = [], initialShelters = [], customPickedPoint = null;
     let latestGeoJson = null, isPickMode = false, running = false;
+    let activeRequest = 0;
     exportButton.disabled = true;
 
     function switchBasemap(name) {
@@ -481,6 +492,7 @@
       basemaps[name].addTo(map);
       document.querySelectorAll('.basemap-opt').forEach(btn => btn.classList.toggle('active',btn.id === 'bm-'+name));
     }
+    window.switchBasemap = switchBasemap;
     document.getElementById('toggle-config-btn').onclick = () => {
       const drawer = document.getElementById('config-drawer');
       drawer.style.display = drawer.style.display === 'block' ? 'none' : 'block';
@@ -502,6 +514,7 @@
       if(match){const radius=Number(match[1])*(/公里|千米|km/i.test(match[2])?1000:1);if(Number.isFinite(radius)&&radius>0&&radius<=50000)showRadius(radius);}
     }
     function setQuery(query) { document.getElementById('query-input').value = query;syncRadius(query); }
+    window.setQuery = setQuery;
     document.getElementById('query-input').addEventListener('input',event=>syncRadius(event.target.value));
     document.getElementById('buffer-select').onchange = event => {
       const input = document.getElementById('query-input');
@@ -554,7 +567,7 @@
     }
     function renderFeatures(geojson) {
       if (!geojson || geojson.type!=='FeatureCollection' || !Array.isArray(geojson.features)) throw new Error('地图结果格式无效');
-      layerGroup.clearLayers();
+      const nextLayers = L.layerGroup();
       for (const feature of geojson.features) {
         const props = feature.properties??{};
         const color = props.type==='shelter'?'#10b981':props.type==='waterlog'?'#f43f5e':'#38bdf8';
@@ -564,8 +577,9 @@
           onEachFeature:(f,layer)=>layer.bindPopup(popup(props.name??props.target_point??'演示缓冲区',[
             '自建演示数据',props.type==='shelter'?'距离：'+props.distance_meters+' 米；容量：'+props.capacity+' 人':props.type==='buffer_zone'?'半径：'+props.distance+' 米':'非实时积水数据'
           ]))
-        }).addTo(layerGroup);
+        }).addTo(nextLayers);
       }
+      layerGroup.clearLayers();nextLayers.eachLayer(layer=>layerGroup.addLayer(layer));
       latestGeoJson=geojson;exportButton.disabled=false;
       if(geojson.parameters)showRadius(geojson.parameters.distance_meters);
       populateTable(geojson.matched_shelters??[]);
@@ -587,65 +601,51 @@
     };
     async function executeAnalysis() {
       const query=document.getElementById('query-input').value.trim();if(!query||running)return;
-      running=true;submit.disabled=true;latestGeoJson=null;exportButton.disabled=true;
+      const requestId=++activeRequest;
+      running=true;submit.disabled=true;cancelButton.hidden=false;latestGeoJson=null;exportButton.disabled=true;
+      analysisStatus.textContent='分析中，等待后端结果';
       renderBaseElements();populateTable([],'分析中，等待后端结果');
       addTrace('user','分析请求',query);
-      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),65000);
-      let reader;
       try{
-        const response=await fetch(endpoint+'/api/query/stream',{
-          method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
-          body:JSON.stringify({
-            query,mode:document.getElementById('analysis-mode').value,
-            api_key:document.getElementById('api-key').value.trim(),
-            base_url:document.getElementById('api-base-url').value.trim(),
-            model:document.getElementById('api-model').value,custom_point:customPickedPoint
-          })
-        });
-        if(!response.ok){
-          let message='请求失败，HTTP '+response.status;
-          try{const body=await response.json();if(Array.isArray(body.detail))message=body.detail.map(e=>e.loc.join('.')+': '+e.msg).join('\n');}catch{message+='（服务未返回可读错误详情）';}
-          throw new Error(message);
-        }
-        if(!response.body)throw new Error('服务未返回事件流');
-        reader=response.body.getReader();const decoder=new TextDecoder();let buffer='',terminal=false;
-        function frame(block){
-          const data=block.split(/\r?\n/).filter(line=>line.startsWith('data:')).map(line=>line.slice(5).trimStart()).join('\n');
-          if(!data)return;
-          const item=JSON.parse(data);
+        const result=await analysisClient.run({
+          query,mode:document.getElementById('analysis-mode').value,
+          api_key:document.getElementById('api-key').value.trim(),
+          base_url:document.getElementById('api-base-url').value.trim(),
+          model:document.getElementById('api-model').value,custom_point:customPickedPoint
+        },{onEvent(item){
+          if(requestId!==activeRequest)return;
           if(item.event==='mode'){
             modeStatus.textContent=(item.data.mode==='remote'?'远程模型模式':'本地规则模式')+' · 自建演示数据';
           }else if(item.event==='thought')addTrace('thought','执行状态',item.data);
           else if(item.event==='tool_call')addTrace('tool','工具调用：'+item.data.tool,'校验后的执行参数',JSON.stringify(item.data.arguments,null,2));
           else if(item.event==='tool_result')addTrace('tool','计算结果','空间分析已返回',JSON.stringify(item.data,null,2));
-          else if(item.event==='error')throw new Error(item.data.message??String(item.data));
-          else if(item.event==='result'){
-            renderFeatures(item.data.geojson);addTrace('result','演示分析结果',item.data.summary);terminal=true;
-          }
-        }
-        while(!terminal){
-          const {done,value}=await reader.read();buffer+=done?decoder.decode():decoder.decode(value,{stream:true});
-          let separator;
-          while(!terminal&&(separator=/\r?\n\r?\n/.exec(buffer))){
-            const block=buffer.slice(0,separator.index);buffer=buffer.slice(separator.index+separator[0].length);frame(block);
-          }
-          if(done){if(!terminal&&buffer.trim())frame(buffer);break;}
-        }
-        if(!terminal)throw new Error('事件流提前结束，尚未取得分析结果');
+        }});
+        if(requestId!==activeRequest)return;
+        renderFeatures(result.geojson);addTrace('result','演示分析结果',result.summary);
+        analysisStatus.textContent='分析完成 · '+(result.geojson.matched_shelters?.length??0)+' 处匹配设施';
       }catch(error){
-        latestGeoJson=null;exportButton.disabled=true;renderBaseElements();populateTable([],'分析未完成');
-        addTrace('error','分析失败',error.name==='AbortError'?'请求超时，请重试。':error.message);
+        if(requestId!==activeRequest)return;
+        const stopped=error instanceof AnalysisCancelledError;
+        const message=stopped?'本次分析已取消':error.message;
+        latestGeoJson=null;exportButton.disabled=true;renderBaseElements();
+        analysisStatus.textContent=message+'；未生成分析结果';
+        populateTable([],stopped?'分析已取消':'分析未完成');
+        addTrace(stopped?'thought':'error',stopped?'已取消':'分析失败',message);
       }finally{
-        clearTimeout(timer);if(reader){try{await reader.cancel();}catch(error){console.warn('事件流清理失败：'+error.name);}reader.releaseLock();}
-        running=false;submit.disabled=false;
+        if(requestId===activeRequest){
+          running=false;submit.disabled=false;cancelButton.hidden=true;exportButton.disabled=!latestGeoJson;
+        }
       }
     }
+    cancelButton.onclick=()=>analysisClient.cancel();
+    window.addEventListener('pagehide',()=>analysisClient.cancel());
     document.getElementById('submit-btn').onclick=executeAnalysis;
     document.getElementById('query-input').addEventListener('keydown',event=>{if(event.key==='Enter')executeAnalysis();});
     (async()=>{
       try{
         const response=await fetch(endpoint+'/api/demo');if(!response.ok)throw new Error('演示图层加载失败');
-        const data=await response.json();initialPoints=data.waterlog_points;initialShelters=data.shelters;renderBaseElements();
+        const data=await response.json();initialPoints=data.waterlog_points;initialShelters=data.shelters;
+        if(!latestGeoJson&&!running)renderBaseElements();
       }catch{
         addTrace('error','服务未就绪','请通过 http://127.0.0.1:8000/ 服务入口打开；底图瓦片依赖网络，空间计算使用本机后端。');
       }

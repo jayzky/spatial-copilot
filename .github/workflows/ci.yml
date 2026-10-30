@@ -18,7 +18,17 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest fastapi pydantic shapely numpy uvicorn
+          python -m pip install -e . pytest
       - name: Run tests
         run: |
-          pytest -v
+          python -m pytest -v
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Test stream client
+        run: node --test tests/test_stream.mjs
+      - name: Verify distributable web assets
+        run: |
+          python -m pip wheel --no-deps --wheel-dir dist .
+          python -c "from pathlib import Path; from zipfile import ZipFile; names = ZipFile(next(Path('dist').glob('spatial_copilot-*.whl'))).namelist(); assert all(p in names for p in ['api/index.html', 'api/analysis-client.mjs', 'api/vendor/leaflet.js', 'api/vendor/leaflet.css'])"

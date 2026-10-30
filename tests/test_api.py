@@ -119,6 +119,10 @@ def test_local_sse_finishes_and_static_assets_work():
     with TestClient(server.app) as client:
         assert client.get("/").status_code == 200
         assert client.get("/vendor/leaflet.js").status_code == 200
+        module = client.get("/analysis-client.mjs")
+        assert module.status_code == 200
+        assert module.headers["content-type"].startswith("text/javascript")
+        assert "export class AnalysisClient" in module.text
         assert client.get("/api/demo").json()["data_source"] == "synthetic_demo"
         output = events(client.post("/api/query/stream", json={"query": "500米", "mode": "local"}))
     assert [e["event"] for e in output] == ["mode", "thought", "tool_call", "tool_result", "result"]
@@ -126,6 +130,23 @@ def test_local_sse_finishes_and_static_assets_work():
     assert result["matched_count"] > 0
     assert output[-1]["data"]["mode"] == "local"
     json.dumps(output, allow_nan=False)
+
+
+def test_health_reports_local_service_without_calling_model(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "private-health-test")
+
+    async def forbidden(**kwargs):
+        raise AssertionError("健康检查不得发起分析或模型请求")
+
+    monkeypatch.setattr(server.agent, "run_stream", forbidden)
+    with TestClient(server.app) as client:
+        response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok", "service": "spatial-copilot", "version": "0.1.0",
+        "default_mode": "local", "data_source": "synthetic_demo",
+    }
+    assert "private-health-test" not in response.text
 
 
 def test_explicit_overrides_and_no_match():
@@ -250,3 +271,42 @@ def test_stream_exception_is_error_and_does_not_echo_details(monkeypatch):
         output = events(client.post("/api/query/stream", json={"query": "500米"}))
     assert output[-1]["data"]["code"] == "stream_failed"
     assert "private-test" not in json.dumps(output)
+
+
+def test_disconnected_consumer_closes_agent_generator(monkeypatch):
+    closed = []
+
+    async def waiting(**kwargs):
+        try:
+            yield {"event": "thought", "data": "等待模型响应"}
+            await asyncio.Event().wait()
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(server.agent, "run_stream", waiting)
+
+    async def disconnect():
+        response = await server.stream_query(server.QueryRequest(query="500米"))
+        assert "等待模型响应" in await anext(response.body_iterator)
+        await response.body_iterator.aclose()
+
+    asyncio.run(disconnect())
+    assert closed == [True]
+
+
+@pytest.mark.parametrize("event", ["result", "error"])
+def test_terminal_event_closes_agent_without_emitting_later_frames(monkeypatch, event):
+    closed = []
+
+    async def terminal(**kwargs):
+        try:
+            yield {"event": event, "data": {"message": "终止"}}
+            yield {"event": "thought", "data": "不应返回"}
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(server.agent, "run_stream", terminal)
+    with TestClient(server.app) as client:
+        output = events(client.post("/api/query/stream", json={"query": "500米"}))
+    assert [item["event"] for item in output] == [event]
+    assert closed == [True]

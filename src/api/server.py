@@ -1,4 +1,5 @@
 import json
+from contextlib import aclosing
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -11,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from agent.llm_agent import RealLLMSpatialAgent
 from agent.validator import AnalysisPoint
 
-app = FastAPI(title="Spatial-Copilot 演示 API")
+app = FastAPI(title="Spatial-Copilot 演示 API", version="0.1.0")
 agent = RealLLMSpatialAgent()
 CLIENT = Path(__file__).parent
 app.mount("/vendor", StaticFiles(directory=CLIENT / "vendor"), name="vendor")
@@ -50,6 +51,19 @@ async def index():
     return FileResponse(CLIENT / "index.html")
 
 
+@app.get("/analysis-client.mjs", include_in_schema=False)
+async def analysis_client():
+    return FileResponse(CLIENT / "analysis-client.mjs", media_type="text/javascript")
+
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok", "service": "spatial-copilot", "version": app.version,
+        "default_mode": "local", "data_source": "synthetic_demo",
+    }
+
+
 @app.get("/api/demo")
 async def demo():
     return agent.sandbox.demo_layers()
@@ -60,16 +74,17 @@ async def stream_query(req: QueryRequest):
     async def event_generator():
         terminal = False
         try:
-            async for chunk in agent.run_stream(
+            async with aclosing(agent.run_stream(
                 query=req.query, api_key=req.api_key, base_url=req.base_url, model=req.model,
                 custom_point=req.custom_point.model_dump() if req.custom_point else None,
                 mode=req.mode, distance_meters=req.distance_meters, min_capacity=req.min_capacity,
-            ):
-                if chunk["event"] in {"result", "error"}:
-                    terminal = True
-                yield "data: " + json.dumps(chunk, ensure_ascii=False, allow_nan=False) + "\n\n"
-                if terminal:
-                    return
+            )) as chunks:
+                async for chunk in chunks:
+                    if chunk["event"] in {"result", "error"}:
+                        terminal = True
+                    yield "data: " + json.dumps(chunk, ensure_ascii=False, allow_nan=False) + "\n\n"
+                    if terminal:
+                        return
             if not terminal:
                 yield "data: " + json.dumps(agent.error("incomplete_stream", "分析未完成，事件流已结束。"), ensure_ascii=False) + "\n\n"
         except Exception:
